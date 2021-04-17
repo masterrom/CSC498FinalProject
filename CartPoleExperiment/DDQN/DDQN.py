@@ -67,11 +67,11 @@ class DQN(Agent):
         self.optim = torch.optim.Adam(self.q.parameters(), lr=1e-4)
 
         # Parameters
-        self.N_STEPS = 1000  # (Size of each epoch)
-        self.ENV_STEPS = 100  # Number of steps to take before updating models
+        self.N_STEPS = 1000 # (Size of each epoch)
+        self.ENV_STEPS = 100 # Number of steps to take before updating models
         self.STEP_BEFORE_TARGET_UPDATE = 400
-        self.BATCH_SIZE = 2500  # Sample Size from the replay buffer
-        self.N_EPOCHS = 200  # Episodes of training
+        self.BATCH_SIZE = 2500 # Sample Size from the replay buffer
+        self.N_EPOCHS = 200 # Episodes of training
         self.gamma = gamma
 
         wandb.config.N_STEPS = self.N_STEPS
@@ -92,13 +92,17 @@ class DQN(Agent):
         """
 
         with torch.no_grad():
-            qVals = torch.zeros(states.shape[0], dtype=torch.float)  # Initializing QVals
-            for i in range(states.shape[0]):  # Looping through batch
-                qs = self.q_target(torch.tensor(states[i]))  # Computing Q values from the target network
-                maxActionIndex = torch.argmax(qs)  # Selecting the best action
-                qVals[i] = qs[maxActionIndex]  # selecting the max qValues from the dataset
+            # QVals
+            qVals = torch.zeros(states.shape[0], dtype=torch.float)  # initializing QVals matrix
+            for i in range(states.shape[0]):  # Looping through the batch
+                qs = self.q(torch.tensor(states[i]))  # Computing the Q values using the policy network
+                maxActionIndex = torch.argmax(qs)  # selecting the action with the highest q value
 
-            qTargetVals = rewards + (self.gamma * qVals.numpy())  # Computing the final Target
+                # Computing the Q values using the target network, and selecting the action choosen by
+                # the policy network.
+                qVals[i] = self.q_target(torch.tensor(states[i]))[maxActionIndex]
+
+            qTargetVals = rewards + (self.gamma * qVals.numpy())  # Computing the final target value
 
         return qTargetVals
 
@@ -135,6 +139,7 @@ class DQN(Agent):
         state = torch.from_numpy(state).view(1, -1)
         actions = self.q(state)
         return torch.argmax(actions)
+
     def computeTrainingStep(self, transitions):
 
         nextStates = np.stack([s.nextState for s in transitions])
@@ -236,92 +241,6 @@ class DQN(Agent):
 
         return avgReward
 
-    # def computeTrainingStep(self, transitions):
-    #
-    #     nextStates = np.stack([s.nextState for s in transitions])
-    #     states = np.stack([s.state for s in transitions])
-    #     actions = np.stack([np.array(s.action) for s in transitions])
-    #     rewards = np.stack([s.reward for s in transitions])
-    #
-    #     # import ipdb;
-    #     # ipdb.set_trace()
-    #
-    #     target = self.compute_target(nextStates, rewards)
-    #     loss = self.loss(states, actions, target)
-    #
-    #     return loss
-    #
-    # def train(self, task):
-    #
-    #     # Collect initial Data
-    #     self.fillBuffer(task)
-    #     for i in tqdm.tqdm(range(self.N_EPOCHS)):
-    #         epoch_losses = self.train_epoch(task, False)
-    #         # losses.extend(epoch_losses)
-    #
-    #         self.getAverageReward(task, i)
-    #
-    #
-    #         torch.save({
-    #             'targetModel_state_dict': self.q_target.state_dict(),
-    #             'qModel_state_dict': self.q.state_dict(),
-    #         }, "./targetModels/modelTimeStamp-" + str(i) + ".pt")
-    #     # return losses
-    #
-    # def train_epoch(self, task, random=False):
-    #
-    #     lastObs = task.reset()
-    #     for i in range(self.N_STEPS):
-    #
-    #         act = np.random.choice([self(lastObs), np.random.randint(self.actions)], p=[0.9, 0.1])
-    #         if random:
-    #             act = np.random.randint(self.actions)
-    #         obs, rew, done, info = task.step(act)
-    #         exper = Data(lastObs, act, rew, obs, done)
-    #         self.replayBuffer.insert(exper)
-    #         lastObs = obs
-    #
-    #         samples = self.replayBuffer.sample(self.BATCH_SIZE)
-    #         loss = self.computeTrainingStep(samples)
-    #
-    #         wandb.log({"Loss": loss, "title": "DQN with Replay Buffer Loss"})
-    #
-    #         self.optim.zero_grad()
-    #         loss.backward()
-    #         self.optim.step()
-    #
-    #     with torch.no_grad():
-    #         print("Updating Target Model")
-    #         self.q_target.load_state_dict(self.q.state_dict())
-    #
-    # def fillBuffer(self, task, random=False):
-    #     # Do not modify
-    #     lastObs = task.reset()
-    #     for exp in range(self.replayBuffer.bufferSize):
-    #
-    #         act = np.random.choice([self(lastObs), np.random.randint(self.actions)], p=[0.9, 0.1])
-    #         if random:
-    #             act = np.random.randint(self.actions)
-    #
-    #         obs, rew, done, info = task.step(act)
-    #
-    #         exper = Data(lastObs, act, rew, obs, done)
-    #         self.replayBuffer.insert(exper)
-    #         lastObs = obs
-    #
-    # def getAverageReward(self, task, epoch):
-    #     rewards = np.zeros((100, 100))
-    #
-    #     for run in range(100):
-    #         obs = task.reset()
-    #         for step in range(100):
-    #             act = self(obs)
-    #             obs, rew, done, info = task.step(act.item())
-    #             rewards[run, step] = rew
-    #
-    #     avgReward = rewards.sum(1).std()
-    #     wandb.log({"avgReward": avgReward, "epoch": epoch})
-
 
 def testModel(path):
     checkpoint = torch.load(path)
@@ -331,6 +250,15 @@ def testModel(path):
 
     agent.q_target.load_state_dict(checkpoint['targetModel_state_dict'])
 
+    # obs = task.reset()
+    # while True:
+    #     act = agent(obs)
+    #     obs, rew, done, info = task.step(act.item())
+    #     task.render()
+    #     if done:
+    #         print("Reseting")
+    #         obs = task.reset()
+    #
     rewards = np.zeros((100, 100))
 
     for run in range(100):
@@ -375,8 +303,6 @@ def training(path=None):
 
 if __name__ == '__main__':
 
-    # Model at episode 38
-    # Model at episode 68
-    training("./targetModels-Run1/modelTimeStamp-74.pt")
+    training()
     # testModel("./targetModels/modelTimeStamp-68.pt")
 
