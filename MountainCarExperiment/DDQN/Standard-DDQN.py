@@ -7,7 +7,8 @@ import numpy as np
 import tqdm
 import wandb
 
-wandb.init(project='Cartpole', entity='masterrom')
+wandb.init(project='MountainCar', entity='masterrom')
+
 
 # Simple agent class, taken from HW3
 class Agent():
@@ -57,13 +58,17 @@ class DQN(Agent):
         """
 
         with torch.no_grad():
-            qVals = torch.zeros(states.shape[0], dtype=torch.float)  # Initializing QVals
-            for i in range(states.shape[0]):  # Looping through batch
-                qs = self.q_target(states[i])  # Computing Q values from the target network
-                maxActionIndex = torch.argmax(qs)  # Selecting the best action
-                qVals[i] = qs[maxActionIndex]  # selecting the max qValues from the dataset
+            # QVals
+            qVals = torch.zeros(states.shape[0], dtype=torch.float)  # initializing QVals matrix
+            for i in range(states.shape[0]):  # Looping through the batch
+                qs = self.q(torch.tensor(states[i]))  # Computing the Q values using the policy network
+                maxActionIndex = torch.argmax(qs)  # selecting the action with the highest q value
 
-            qTargetVals = rewards + (self.gamma * qVals)  # Computing the final Target
+                # Computing the Q values using the target network, and selecting the action choosen by
+                # the policy network.
+                qVals[i] = self.q_target(torch.tensor(states[i]))[maxActionIndex]
+
+            qTargetVals = rewards + (self.gamma * qVals.numpy())  # Computing the final target value
 
         return qTargetVals
 
@@ -105,7 +110,7 @@ class DQN(Agent):
         len_runs = states.shape[1]
         losses = []
 
-        for i in range(self.N_STEPS): # Step through the length of the epoch
+        for i in range(self.N_STEPS):  # Step through the length of the epoch
             # Extract out batches
             batch_x = np.random.randint(num_runs, size=(self.BATCH_SIZE,))
             batch_y = np.random.randint(len_runs, size=(self.BATCH_SIZE,))
@@ -178,13 +183,96 @@ class DQN(Agent):
 
         return states, actions, rewards
 
+    def reward(self, state, nextState, action, reward):
+        """
+        reward function to promote momentum building action sequence
+        :param state:
+        :param nextState:
+        :param action:
+        :param reward:
+        :return:  modified reward
+        """
+        if nextState[0] - state[0] > 0 and action == 2: reward = 1
+        if nextState[0] - state[0] < 0 and action == 0: reward = 1
+        return reward
+
+    def getAverageReward(self, task):
+        """
+        getAverageReward will run the given task 100 times and return the average score
+        produced by the target-network
+        :param task: gym instance
+        :param epoch: None
+        :return: averageRewaard
+        """
+        rewards = np.zeros((100, 200))
+
+        scores = []
+        for run in range(100):
+            score = 0
+            obs = task.reset()
+            for step in range(200):
+                # state = torch.from_numpy(obs).view(1, -1)
+                actions = self.q_target(torch.tensor(obs))
+                act = torch.argmax(actions)
+                obs, rew, done, info = task.step(act.item())
+                score += rew
+
+                if done:
+                    break
+
+            scores.append(score)
+
+        avgReward = np.mean(scores)
+        # avgReward = rewards.sum(1).std()
+        wandb.log({"avgReward": avgReward})
+
+        return avgReward
+
+
+def testModel(path):
+    """
+    testModel is used to load in a stored model and perfrom 100 runs for the maiin task
+    :param path: path to the model
+    :return:
+    """
+
+    checkpoint = torch.load(path)
+    task = gym.make("MountainCar-v0")
+    agent = DQN(task.observation_space.shape[-1], task.action_space.n)
+
+    agent.q_target.load_state_dict(checkpoint['targetModel_state_dict'])
+
+    rewards = np.zeros((100, 200))
+
+    scores = []
+    for run in range(100):
+        obs = task.reset()
+        score = 0
+        for step in range(200):
+
+            actions = agent.q_target(torch.tensor(obs))
+            act = torch.argmax(actions)
+
+            obs, rew, done, info = task.step(act.item())
+            score += rew
+            task.render()
+            if done:
+                break
+
+        print("Score for iteration:{} = {}".format(run, score))
+        scores.append(score)
+
+    print("Average return: {}".format(np.mean(scores)))
+    # print("Standard deviation: {}".format(rewards.sum(1).std()))
 
 
 
 if __name__ == '__main__':
 
+    # testModel("./targetModels/modelTimeStamp-199.pt")
+
     # Do not modify
-    task = gym.make("CartPole-v1")
+    task = gym.make("MountainCar-v0")
     agent = DQN(task.observation_space.shape[-1], task.action_space.n)
 
     losses = agent.train(task)
@@ -192,15 +280,25 @@ if __name__ == '__main__':
     # Final Benchmarking
     print("Final Benchmarking")
 
-    rewards = np.zeros((100, 100))
-
+    rewards = np.zeros((100, 200))
+    scores = []
     for run in range(100):
         obs = task.reset()
-        for step in range(100):
+        score = 0
+        for step in range(200):
             act = agent(obs)
             obs, rew, done, info = task.step(act.item())
-            rewards[run, step] = rew
+            score += rew
+            if done:
+                break
             task.render()
 
-    print("Average return: {}".format(rewards.sum(1).mean()))
-    print("Standard deviation: {}".format(rewards.sum(1).std()))
+        print("iteration {} : Score {}".format(run, score))
+        scores.append(score)
+
+
+    print("Average return: {}".format(np.mean(scores)))
+    # print("Standard deviation: {}".format(rewards.sum(1).std()))
+
+
+

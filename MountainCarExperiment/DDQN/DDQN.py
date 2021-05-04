@@ -11,7 +11,9 @@ from dataclasses import dataclass
 from typing import Any
 from random import sample, random
 
-wandb.init(project='Cartpole', entity='masterrom')
+wandb.init(project='MountainCar', entity='masterrom')
+
+targetUpdate = 0
 
 # Data type class used for storing transitions into the replay buffer
 @dataclass
@@ -38,7 +40,7 @@ class ReplayBuffer():
 
 # Simple agent class, taken from HW3
 class Agent():
-    def __init__(self, observation_dim, params=None, action_bounds=None):
+    def __init__(self, observation_dim, params = None, action_bounds = None):
         pass
 
     def __call__(self, obs):
@@ -53,12 +55,14 @@ class DQN(Agent):
 
         self.actions = action_dim
         self.obs_dim = observation_dim
+
         # acting - network
         self.q = nn.Sequential(
             nn.Linear(self.obs_dim, 256),
             nn.ReLU(),
             nn.Linear(256, self.actions)
         ).double()
+
         # target - network
         self.q_target = nn.Sequential(
             nn.Linear(self.obs_dim, 256),
@@ -69,16 +73,16 @@ class DQN(Agent):
         self.optim = torch.optim.Adam(self.q.parameters(), lr=1e-4)
 
         # Parameters
-        self.N_STEPS = 1000  # (Size of each epoch)
-        self.ENV_STEPS = 100  # Number of steps to take before updating models
-        self.STEP_BEFORE_TARGET_UPDATE = 300
-        self.BATCH_SIZE = 2500  # Sample Size from the replay buffer
-        self.N_EPOCHS = 200  # Episodes of training
+        self.N_STEPS = 1000 # (Size of each epoch)
+        self.ENV_STEPS = 100 # Number of steps to take before updating models
+        self.STEP_BEFORE_TARGET_UPDATE = 600
+        self.BATCH_SIZE = 2500 # Sample Size from the replay buffer
+        self.N_EPOCHS = 200 # Episodes of training
         self.gamma = gamma
 
         self.EPSILON = 1.0
-        self.MIN_EPS = 0.001
         self.EPS_DECAY = 0.99998
+
 
         wandb.config.N_STEPS = self.N_STEPS
         wandb.config.ENV_STEPS = self.ENV_STEPS
@@ -98,13 +102,17 @@ class DQN(Agent):
         """
 
         with torch.no_grad():
-            qVals = torch.zeros(states.shape[0], dtype=torch.float)  # Initializing QVals
-            for i in range(states.shape[0]):  # Looping through batch
-                qs = self.q_target(torch.tensor(states[i]))  # Computing Q values from the target network
-                maxActionIndex = torch.argmax(qs)  # Selecting the best action
-                qVals[i] = qs[maxActionIndex]  # selecting the max qValues from the dataset
+            # QVals
+            qVals = torch.zeros(states.shape[0], dtype=torch.float)  # initializing QVals matrix
+            for i in range(states.shape[0]):  # Looping through the batch
+                qs = self.q(torch.tensor(states[i]))  # Computing the Q values using the policy network
+                maxActionIndex = torch.argmax(qs)  # selecting the action with the highest q value
 
-            qTargetVals = rewards + (self.gamma * qVals.numpy())  # Computing the final Target
+                # Computing the Q values using the target network, and selecting the action choosen by
+                # the policy network.
+                qVals[i] = self.q_target(torch.tensor(states[i]))[maxActionIndex]
+
+            qTargetVals = rewards + (self.gamma * qVals.numpy())  # Computing the final target value
 
         return qTargetVals
 
@@ -121,9 +129,11 @@ class DQN(Agent):
 
         # Computing the Q values from the policy network, then selecting the Q values of actions specificed in
         # in the action matrix
-        actions = np.reshape(actions, (actions.shape[0], 1))  # Puting actions into a single column =
+        actions = np.reshape(actions, (actions.shape[0], 1)) # Puting actions into a single column =
         policyQ = self.q(torch.tensor(states)).gather(1, torch.tensor(actions))
         target = np.reshape(target, (target.shape[0], 1))  # Reshaping the target to be in a single column
+
+        # import ipdb; ipdb.set_trace()
 
         loss = torch.square(torch.tensor(target) - policyQ)  # Computing the squared loss for each time step
 
@@ -142,13 +152,11 @@ class DQN(Agent):
 
     def computeTrainingStep(self, transitions):
         """
-            computeTrainingSteps takes in a batch of transitions,  and computes the
-            Squared Bellman loss
-            :param transitions: array of transitions
-            :return:
+        computeTrainingSteps takes in a batch of transitions,  and computes the
+        Squared Bellman loss
+        :param transitions: array of transitions
+        :return:
         """
-
-
         nextStates = np.stack([s.nextState for s in transitions])
         states = np.stack([s.state for s in transitions])
         actions = np.stack([np.array(s.action) for s in transitions])
@@ -165,12 +173,11 @@ class DQN(Agent):
         :param task: Gym Instance of the environment
         :return:
         """
-
         # Collect initial Data
         self.fillBuffer(task, self.replayBuffer.bufferSize)
         avgRewardMax = -np.inf
         for i in tqdm.tqdm(range(self.N_EPOCHS)):
-            avgMaxReward = self.train_epoch(task, avgRewardMax,False)
+            avgRewardMax = self.train_epoch(task, avgRewardMax, False)
 
     def train_epoch(self, task, avgMaxReward, randn=False):
         """
@@ -180,12 +187,14 @@ class DQN(Agent):
         :param randn:
         :return:
         """
+        global targetUpdate
+
         lastObs = task.reset()
         # avgRewardMax = -np.inf
-        for i in range(self.N_STEPS):  # Step through the length of each epoch
+        for i in range(self.N_STEPS): # Step through the length of each epoch
 
-            if i % self.ENV_STEPS != 0:  # check if the number of environment steps have be conducted or not
-                self.EPSILON = self.EPSILON * self.EPS_DECAY  # Decay epsilon
+            if i % self.ENV_STEPS != 0: # check if the number of environment steps have be conducted or not
+                self.EPSILON = self.EPSILON * self.EPS_DECAY #Decay eps
 
                 # Determine if the action will be randomly sampled or be selected from the acting network
                 if random() < self.EPSILON:
@@ -193,13 +202,15 @@ class DQN(Agent):
                 else:
                     act = self(lastObs).item()
                 # act = np.random.choice([self(lastObs), np.random.randint(self.actions)], p=[0.9, 0.1])
-                # if random:
+                # if randn:
                 #     act = np.random.randint(self.actions)
-                wandb.log({"EPSILON": self.EPSILON})  # Logging epsilon value
+                wandb.log({"EPSILON": self.EPSILON}) # Logging eps
 
-                obs, rew, done, info = task.step(act)  # Stepping through
-                exper = Data(lastObs, act, rew, obs, done)  # converting to dataclass instance
-                self.replayBuffer.insert(exper)  # inserting transition to buffer
+                obs, rew, done, info = task.step(act) # stepping through
+                rew = self.reward(lastObs, obs, act, rew) # Remodifying the reward
+
+                exper = Data(lastObs, act, rew, obs, done) # Convert to dataclass
+                self.replayBuffer.insert(exper) # insert into buffer
                 lastObs = obs
             else:
                 # ENV_STEPS in the environment have stepped, conduct training
@@ -218,15 +229,16 @@ class DQN(Agent):
                     print("Updating Target Model")
                     self.q_target.load_state_dict(self.q.state_dict())
 
-                avgReward = self.getAverageReward(task, i)  # Compute average reward
+                targetUpdate += 1
 
-                # Save model if performance is better
-                if avgReward > avgMaxReward:
-                    torch.save({
-                        'targetModel_state_dict': self.q_target.state_dict(),
-                        'qModel_state_dict': self.q.state_dict(),
-                    }, "./targetModels/modelTimeStamp-" + str(avgReward) + ".pt")
-                    avgMaxReward = avgReward
+                avgReward = self.getAverageReward(task) # Computing avg rew
+
+                # Saving model
+                torch.save({
+                    'targetModel_state_dict': self.q_target.state_dict(),
+                    'qModel_state_dict': self.q.state_dict(),
+                }, "./targetModels/modelTimeStamp-" + str(targetUpdate) + ".pt")
+                avgMaxReward = avgReward
 
         return avgMaxReward
 
@@ -246,12 +258,26 @@ class DQN(Agent):
                 act = np.random.randint(self.actions)
 
             obs, rew, done, info = task.step(act)
+            rew = self.reward(lastObs, obs, act, rew)
 
             exper = Data(lastObs, act, rew, obs, done)
             self.replayBuffer.insert(exper)
             lastObs = obs
 
-    def getAverageReward(self, task, epoch):
+    def reward(self, state, nextState, action, reward):
+        """
+        reward function to promote momentum building action sequence
+        :param state:
+        :param nextState:
+        :param action:
+        :param reward:
+        :return:  modified reward
+        """
+        if nextState[0] - state[0] > 0 and action == 2: reward = 1
+        if nextState[0] - state[0] < 0 and action == 0: reward = 1
+        return reward
+
+    def getAverageReward(self, task):
         """
         getAverageReward will run the given task 100 times and return the average score
         produced by the target-network
@@ -259,20 +285,26 @@ class DQN(Agent):
         :param epoch: None
         :return: averageRewaard
         """
+        rewards = np.zeros((100, 200))
 
-        rewards = np.zeros((100, 100))
-
+        scores = []
         for run in range(100):
+            score = 0
             obs = task.reset()
-            for step in range(100):
+            for step in range(200):
                 # state = torch.from_numpy(obs).view(1, -1)
                 actions = self.q_target(torch.tensor(obs))
                 act = torch.argmax(actions)
-
                 obs, rew, done, info = task.step(act.item())
-                rewards[run, step] = rew
+                score += rew
 
-        avgReward = rewards.sum(1).std()
+                if done:
+                    break
+
+            scores.append(score)
+
+        avgReward = np.mean(scores)
+        # avgReward = rewards.sum(1).std()
         wandb.log({"avgReward": avgReward})
 
         return avgReward
@@ -284,7 +316,6 @@ def testModel(path):
     :param path: path to the model
     :return:
     """
-
     checkpoint = torch.load(path)
     task = gym.make("CartPole-v1")
     replayBuffer = ReplayBuffer()
@@ -297,10 +328,7 @@ def testModel(path):
     for run in range(100):
         obs = task.reset()
         for step in range(100):
-
-            actions = agent.q_target(torch.tensor(obs))
-            act = torch.argmax(actions)
-
+            act = agent(obs)
             obs, rew, done, info = task.step(act.item())
             rewards[run, step] = rew
             task.render()
@@ -308,9 +336,10 @@ def testModel(path):
     print("Average return: {}".format(rewards.sum(1).mean()))
     print("Standard deviation: {}".format(rewards.sum(1).std()))
 
-
 def training(path=None):
-    task = gym.make("CartPole-v1")
+    wandb.init(project='MountainCar', entity='masterrom')
+
+    task = gym.make("MountainCar-v0")
     replayBuffer = ReplayBuffer()
     agent = DQN(task.observation_space.shape[-1], task.action_space.n, replayBuffer)
 
@@ -324,24 +353,32 @@ def training(path=None):
     # Final Benchmarking
     print("Final Benchmarking")
 
-    rewards = np.zeros((100, 100))
+    rewards = np.zeros((100, 200))
 
+    scores = []
     for run in range(100):
         obs = task.reset()
-        for step in range(100):
+        score = 0
+        for step in range(200):
 
             actions = agent.q_target(torch.tensor(obs))
             act = torch.argmax(actions)
 
             obs, rew, done, info = task.step(act.item())
-            rewards[run, step] = rew
+            # rewards[run, step] = rew
+            score += rew
             task.render()
+            if done:
+                break
+            task.render()
+        scores.append(score)
 
-    print("Average return: {}".format(rewards.sum(1).mean()))
-    print("Standard deviation: {}".format(rewards.sum(1).std()))
+    print("Average return: {}".format(np.mean(scores)))
+    # print("Standard deviation: {}".format(rewards.sum(1).std()))
 
 
 if __name__ == '__main__':
-
-    training("./targetModels-Run1/modelTimeStamp-74.pt")
+    # Test out model from 150 to 170
+    training()
     # testModel("./targetModels/modelTimeStamp-68.pt")
+

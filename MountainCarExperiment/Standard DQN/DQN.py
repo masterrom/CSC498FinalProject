@@ -7,7 +7,7 @@ import numpy as np
 import tqdm
 import wandb
 
-wandb.init(project='Cartpole', entity='masterrom')
+wandb.init(project='MountainCar', entity='masterrom')
 
 # Simple agent class, taken from HW3
 class Agent():
@@ -105,7 +105,7 @@ class DQN(Agent):
         len_runs = states.shape[1]
         losses = []
 
-        for i in range(self.N_STEPS): # Step through the length of the epoch
+        for i in range(self.N_STEPS):# Step through the length of the epoch
             # Extract out batches
             batch_x = np.random.randint(num_runs, size=(self.BATCH_SIZE,))
             batch_y = np.random.randint(len_runs, size=(self.BATCH_SIZE,))
@@ -119,6 +119,7 @@ class DQN(Agent):
             loss = self.loss(batch_states, batch_actions, target)
 
             wandb.log({"Loss": loss})
+            # self.getAverageReward(task, 1)
             # Backpropagation
             self.optim.zero_grad()
             loss.backward()
@@ -128,7 +129,6 @@ class DQN(Agent):
         with torch.no_grad():
             print("Updating Target Model")
             self.q_target.load_state_dict(self.q.state_dict())
-
         return losses
 
     def train(self, task):
@@ -137,6 +137,7 @@ class DQN(Agent):
         :param task: Gym Instance of the environment
         :return:
         """
+        # Do not modify
         losses = []
         states, actions, rewards = self.collect_data(task, random=True)
 
@@ -145,11 +146,15 @@ class DQN(Agent):
             epoch_losses = self.train_epoch(states[:, :-1], actions, rewards, states[:, 1:])
             losses += epoch_losses
 
+            self.getAverageReward(task)
+
+
             torch.save({
                 'targetModel_state_dict': self.q_target.state_dict(),
                 'qModel_state_dict': self.q.state_dict(),
             }, "./targetModels/modelTimeStamp-" + str(i) + ".pt")
         return losses
+
 
     def collect_data(self, task, random=False):
         """
@@ -159,6 +164,7 @@ class DQN(Agent):
         :param random:
         :return:
         """
+
         rewards = np.zeros((100, 100, 1))
         states = np.zeros((100, 101, self.obs_dim))
         actions = np.zeros((100, 100, 1))
@@ -172,35 +178,100 @@ class DQN(Agent):
                 if random:
                     act = np.random.randint(self.actions)
                 obs, rew, done, info = task.step(act)
-                rewards[run, step] = rew
+                rewards[run, step] = self.reward(states[run, step],  obs, act, rew)
                 actions[run, step] = act
             states[run, -1] = obs
 
+        # print(f"Average return in training: {np.mean(rewards)}")
         return states, actions, rewards
 
+    def reward(self, state, nextState, action, reward):
+
+        if nextState[0] - state[0] > 0 and action == 2: reward = 1
+        if nextState[0] - state[0] < 0 and action == 0: reward = 1
+        return reward
+
+    def getAverageReward(self, task):
+        rewards = np.zeros((100, 200))
+
+        scores = []
+        for run in range(100):
+            score = 0
+            obs = task.reset()
+            for step in range(200):
+                # state = torch.from_numpy(obs).view(1, -1)
+                actions = self.q_target(torch.tensor(obs))
+                act = torch.argmax(actions)
+
+                obs, rew, done, info = task.step(act.item())
+                score += rew
+
+            scores.append(score)
+
+        avgReward = np.mean(scores)
+        # avgReward = rewards.sum(1).std()
+        wandb.log({"avgReward": avgReward})
+
+        return avgReward
+
+
+def testModel(path):
+    checkpoint = torch.load(path)
+    task = gym.make("MountainCar-v0")
+    agent = DQN(task.observation_space.shape[-1], task.action_space.n)
+
+    agent.q_target.load_state_dict(checkpoint['targetModel_state_dict'])
+
+    rewards = np.zeros((100, 200))
+
+    scores = []
+    for run in range(100):
+        obs = task.reset()
+        score = 0
+        for step in range(200):
+
+            actions = agent.q_target(torch.tensor(obs))
+            act = torch.argmax(actions)
+
+            obs, rew, done, info = task.step(act.item())
+            score += rew
+            task.render()
+            if done:
+                break
+
+        print("Score for iteration:{} = {}".format(run, score))
+        scores.append(score)
+
+    print("Average return: {}".format(np.mean(scores)))
+    # print("Standard deviation: {}".format(rewards.sum(1).std()))
 
 
 
 if __name__ == '__main__':
 
+    testModel("./targetModels/modelTimeStamp-199.pt")
+
     # Do not modify
-    task = gym.make("CartPole-v1")
-    agent = DQN(task.observation_space.shape[-1], task.action_space.n)
+    # task = gym.make("MountainCar-v0")
+    # agent = DQN(task.observation_space.shape[-1], task.action_space.n)
+    #
+    # losses = agent.train(task)
+    #
+    # # Final Benchmarking
+    # print("Final Benchmarking")
+    #
+    # rewards = np.zeros((100, 200))
+    #
+    # for run in range(100):
+    #     obs = task.reset()
+    #     for step in range(200):
+    #         act = agent(obs)
+    #         obs, rew, done, info = task.step(act.item())
+    #         rewards[run, step] = rew
+    #         task.render()
+    #
+    # print("Average return: {}".format(rewards.sum(1).mean()))
+    # print("Standard deviation: {}".format(rewards.sum(1).std()))
 
-    losses = agent.train(task)
 
-    # Final Benchmarking
-    print("Final Benchmarking")
 
-    rewards = np.zeros((100, 100))
-
-    for run in range(100):
-        obs = task.reset()
-        for step in range(100):
-            act = agent(obs)
-            obs, rew, done, info = task.step(act.item())
-            rewards[run, step] = rew
-            task.render()
-
-    print("Average return: {}".format(rewards.sum(1).mean()))
-    print("Standard deviation: {}".format(rewards.sum(1).std()))
